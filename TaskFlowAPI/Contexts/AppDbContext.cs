@@ -2,9 +2,10 @@
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
+using TaskFlowAPI.Models;
 using TaskFlowAPI.Interfaces;
 
-namespace TaskFlowAPI.Models;
+namespace TaskFlowAPI.Contexts;
 
 public class AppDbContext : IdentityDbContext<User>
 {
@@ -185,6 +186,59 @@ public class AppDbContext : IdentityDbContext<User>
         var currentUserId = _httpContextAccessor.HttpContext?.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value
                             ?? "System";
 
+        // EXTRACT ENTRIES TO ARRAY: Avoids collections mutating mid-execution loop
+        var entries = ChangeTracker.Entries().ToList();
+
+        // Handle soft deletion state conversions first
+        foreach (var entry in entries)
+        {
+            if (entry.Entity is ISoftDelete softDelete && entry.State == EntityState.Deleted)
+            {
+                // Intercept hard drop statement and change it to a modified state
+                entry.State = EntityState.Modified;
+                softDelete.IsDeleted = true;
+                softDelete.DeletedAt = DateTime.UtcNow;
+
+                // CASCADE WORKFLOW: Handle nested Child ProjectTask records automatically
+                if (entry.Entity is Project project)
+                {
+                    // Pull down any associated tasks under this project currently tracked or in the db
+                    var linkedTasks = Tasks.Where(t => t.ProjectId == project.Id && !t.IsDeleted).ToList();
+                    foreach (var task in linkedTasks)
+                    {
+                        task.IsDeleted = true;
+                        task.DeletedAt = DateTime.UtcNow;
+                        task.UpdatedAt = DateTime.UtcNow;
+                        task.UpdatedBy = currentUserId;
+
+                        // Deep-Cascade: Push down to soft-delete the comments on these cascading tasks too
+                        var linkedComments = Comments.Where(c => c.TaskId == task.Id && !c.IsDeleted).ToList();
+                        foreach (var comment in linkedComments)
+                        {
+                            comment.IsDeleted = true;
+                            comment.DeletedAt = DateTime.UtcNow;
+                            comment.UpdatedAt = DateTime.UtcNow;
+                            comment.UpdatedBy = currentUserId;
+                        }
+                    }
+                }
+
+                // CASCADE WORKFLOW: Soft-deleting an isolated Task drops its comments
+                if (entry.Entity is ProjectTask singleTask)
+                {
+                    var linkedComments = Comments.Where(c => c.TaskId == singleTask.Id && !c.IsDeleted).ToList();
+                    foreach (var comment in linkedComments)
+                    {
+                        comment.IsDeleted = true;
+                        comment.DeletedAt = DateTime.UtcNow;
+                        comment.UpdatedAt = DateTime.UtcNow;
+                        comment.UpdatedBy = currentUserId;
+                    }
+                }
+            }
+        }
+
+        // Log Auditable metrics on final state models (Added or Modified)
         foreach (var entry in ChangeTracker.Entries())
         {
             if (entry.Entity is IAuditableEntity auditable)
@@ -200,21 +254,11 @@ public class AppDbContext : IdentityDbContext<User>
                     auditable.UpdatedBy = currentUserId;
                 }
             }
-
-            if (entry.Entity is ISoftDelete softDelete && entry.State == EntityState.Deleted)
-            {
-                entry.State = EntityState.Modified;
-                softDelete.IsDeleted = true;
-                softDelete.DeletedAt = DateTime.UtcNow;
-
-                // Architectural Choice: If a project is soft-deleted, we automatically cascade 
-                // the soft-delete property down to its child records manually inside this tracker loop 
-                // if you choose, which keeps query filter definitions warning-free.
-            }
         }
 
         return await base.SaveChangesAsync(cancellationToken);
     }
+
 
     private static System.Linq.Expressions.LambdaExpression ConvertFilterExpression(Type type)
     {
