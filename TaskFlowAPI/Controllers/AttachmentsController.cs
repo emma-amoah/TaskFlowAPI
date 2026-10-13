@@ -37,35 +37,34 @@ public class AttachmentsController : ControllerBase
 
     // POST: api/attachments/upload/{taskId}
 
+    private static readonly long MaxFileSizeInBytes = 5 * 1024 * 1024; // Strict 5MB file ceiling
+    private static readonly string[] AllowedExtensions = { ".pdf", ".png", ".jpg", ".jpeg", ".docx", ".xlsx" };
+
     [HttpPost("upload/{taskId}")]
-    [Consumes("multipart/form-data")] // Explicitly binds file data payload pipeline context streams
+    [Consumes("multipart/form-data")]
     public async Task<ActionResult<AttachmentFileDto>> UploadFile(int taskId, IFormFile file)
     {
-        if (file == null || file.Length == 0)
-        {
-            return BadRequest("No file payload data was provided.");
-        }
+        if (file == null || file.Length == 0) return BadRequest("No file payload data was provided.");
 
-        if (!await _context.Tasks.AnyAsync(t => t.Id == taskId))
-        {
-            return NotFound($"Parent Task with ID {taskId} does not exist.");
-        }
+        // 1. HARDEN SIZE: Enforce max payload limit barriers
+        if (file.Length > MaxFileSizeInBytes) return BadRequest("File size exceeds the maximum limit of 5MB.");
 
-        // DISAMBIGUATE FILENAMES: Extract original display token text string
+        // 2. HARDEN TYPE: Enforce explicit extension boundaries
         var originalName = Path.GetFileName(file.FileName);
-        var fileExtension = Path.GetExtension(originalName);
+        var fileExtension = Path.GetExtension(originalName).ToLower();
+        if (!AllowedExtensions.Contains(fileExtension)) return BadRequest($"Unsupported file extension. Allowed types: {string.Join(", ", AllowedExtensions)}");
 
-        // GENERATE STORAGE UNIQUE KEY: Prevents name collisions entirely
+        if (!await _context.Tasks.AnyAsync(t => t.Id == taskId)) return NotFound($"Parent Task with ID {taskId} does not exist.");
+
         var uniqueStorageName = $"{Guid.NewGuid()}{fileExtension}";
         var physicalSaveLocation = Path.Combine(_storagePath, uniqueStorageName);
 
-        // COMIT STREAM TO DISK
-        using (var stream = new FileStream(physicalSaveLocation, FileMode.Create))
+        // 3. SECURE INTEGRITY: Save binary to disk first
+        await using (var stream = new FileStream(physicalSaveLocation, FileMode.Create))
         {
             await file.CopyToAsync(stream);
         }
 
-        // MAP TO DATABSE ENTITY RECORD BOUNDARIES
         var attachmentRecord = new AttachmentFile
         {
             OriginalFileName = originalName,
@@ -77,10 +76,24 @@ public class AttachmentsController : ControllerBase
         };
 
         _context.Attachments.Add(attachmentRecord);
-        await _context.SaveChangesAsync();
+
+        try
+        {
+            await _context.SaveChangesAsync();
+        }
+        catch (Exception)
+        {
+            // HARDEN ORPHANS: If saving the DB record fails, delete the physical disk file immediately to prevent orphan trash leak build-up
+            if (System.IO.File.Exists(physicalSaveLocation))
+            {
+                System.IO.File.Delete(physicalSaveLocation);
+            }
+            throw; // Re-throw to be cleanly captured by global exception middleware
+        }
 
         return Ok(_mapper.Map<AttachmentFileDto>(attachmentRecord));
     }
+
 
     // GET: api/attachments/download/{id}
 

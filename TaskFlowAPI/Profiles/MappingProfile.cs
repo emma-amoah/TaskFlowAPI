@@ -26,6 +26,8 @@ public class MappingProfile : Profile
             .ForMember(dest => dest.Status, opt => opt.MapFrom(src => System.Enum.Parse<TaskFlowAPI.Models.TaskStatus>(src.Status, true)))
             .ForMember(dest => dest.Priority, opt => opt.MapFrom(src => System.Enum.Parse<TaskPriority>(src.Priority, true)));
 
+        CreateMap<UpdateTaskDto, ProjectTask>();
+
         CreateMap<ProjectTask, TaskDto>()
             // Convert strongly typed Enums back to readable JSON strings for clients
             .ForMember(dest => dest.Status, opt => opt.MapFrom(src => src.Status.ToString()))

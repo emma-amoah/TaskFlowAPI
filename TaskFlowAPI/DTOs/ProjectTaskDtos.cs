@@ -58,3 +58,10 @@ public class CreateTaskDto
 
     public string? AssignedToId { get; set; }
 }
+
+public class UpdateTaskDto : CreateTaskDto
+{
+    // RowVersion provided during updates to protect data integrity
+    [Required]
+    public byte[] RowVersion { get; set; } = Array.Empty<byte>();
+}

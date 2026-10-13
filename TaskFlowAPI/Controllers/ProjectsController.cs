@@ -33,14 +33,10 @@ public class ProjectsController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<PagedList<ProjectDto>>> GetProjects([FromQuery] QueryParameters parameters)
     {
-        // Start with an un-evaluated IQueryable stream
-        var query = _context.Projects
-            .Include(p => p.Tasks)
-            .Include(p => p.ProjectMembers)
-                .ThenInclude(pm => pm.User)
-            .AsNoTracking(); // Optimization: bypasses EF change tracking cache for read-only streams
+        // retrieve the base queryable set of projects without tracking to optimize read-only operations
+        var query = _context.Projects.AsNoTracking();
 
-        // Filter: Apply text search filter against project name or description if provided
+        // Filter: Apply text search filter against project name or description
         if (!string.IsNullOrWhiteSpace(parameters.SearchTerm))
         {
             var search = parameters.SearchTerm.Trim().ToLower();
@@ -48,27 +44,41 @@ public class ProjectsController : ControllerBase
                                      p.Description.ToLower().Contains(search));
         }
 
-        // Sort: Pass the sorting instructions dynamically to our expression builder helper
-        // Fallback default column sorting key if the client sends an invalid property name target
+        // Sort: Pass the sorting instructions dynamically to the expression builder helper
         string sortColumn = string.IsNullOrWhiteSpace(parameters.SortBy) ? "Id" : parameters.SortBy;
         query = query.OrderByCustom(sortColumn, parameters.IsDescending);
 
-        // Page: Execute pagination math directly on SQL server engine using Skip/Take via our helper
-        var pagedEntities = await PagedList<Project>.CreateAsync(query, parameters.PageNumber, parameters.PageSize);
+        var projectedQuery = query.Select(p => new ProjectDto
+        {
+            Id = p.Id,
+            Name = p.Name,
+            Description = p.Description,
+            CreatedAt = p.CreatedAt,
+            // Inline aggregate calculation translated directly into a SQL COUNT() statement
+            TotalTasksCount = p.Tasks.Count(t => !t.IsDeleted),
 
-        // Map the paginated DB objects safely into structural DTO array schemas
-        var mappedItems = _mapper.Map<List<ProjectDto>>(pagedEntities.Items);
+            // Project nested collections cleanly without loading entire IdentityUser entities
+            Members = p.ProjectMembers.Select(pm => new ProjectMemberDto
+            {
+                UserId = pm.UserId,
 
-        // Package the dataset with pagination metadata to provide a standard envelope contract
-        var response = new PagedList<ProjectDto>(
-            mappedItems,
-            pagedEntities.TotalCount,
-            pagedEntities.CurrentPage,
-            pagedEntities.PageSize
-        );
+                // 1. FIXED: Handle both cases where the User object OR the underlying UserName string is null
+                UserName = (pm.User != null && pm.User.UserName != null)
+                ? pm.User.UserName
+                : string.Empty,
+
+                // 2. FIXED: Fallback to a default string if the database column contains a null value
+                Role = pm.Role ?? "Member"
+            }).ToList()
+
+        });
+
+        // PagedList script now handles the Skip/Take logic entirely on the projected DTO query
+        var response = await PagedList<ProjectDto>.CreateAsync(projectedQuery, parameters.PageNumber, parameters.PageSize);
 
         return Ok(response);
     }
+
 
     // GET: api/projects/{id}
 
@@ -153,4 +163,49 @@ public class ProjectsController : ControllerBase
 
         return NoContent();
     }
+
+    // POST: api/projects/{id}/archive-and-cleanup
+    [HttpPost("{id}/archive-and-cleanup")]
+    public async Task<IActionResult> ArchiveProjectAndCleanupTasks(int id)
+    {
+        var project = await _context.Projects.FindAsync(id);
+        if (project == null) return NotFound($"Project with ID {id} was not found.");
+
+        // 1. Initiate an explicit multi-step ACID transaction boundary
+        using var transaction = await _context.Database.BeginTransactionAsync();
+
+        try
+        {
+            // Step A: Update parent Project state metrics
+            project.Description = $"[ARCHIVED ON {DateTime.UtcNow:yyyy-MM-dd}] - " + project.Description;
+            _context.Projects.Update(project);
+            await _context.SaveChangesAsync();
+
+            // Step B: Bulk execute state modification updates across children via the same context frame
+            var activeTasks = await _context.Tasks.Where(t => t.ProjectId == id && !t.IsDeleted).ToListAsync();
+            foreach (var task in activeTasks)
+            {
+                task.Status = TaskFlowAPI.Models.TaskStatus.Completed; // Mark remaining backlog done during archiving
+                _context.Tasks.Update(task);
+            }
+            await _context.SaveChangesAsync();
+
+            // Step C: Flush obsolete structural metadata rows entirely (e.g. clean stale project member records)
+            var projectMembers = await _context.ProjectMembers.Where(pm => pm.ProjectId == id).ToListAsync();
+            _context.ProjectMembers.RemoveRange(projectMembers);
+            await _context.SaveChangesAsync();
+
+            // 2. Commit all 3 discrete execution steps as a single immutable database block unit
+            await transaction.CommitAsync();
+
+            return Ok(new { Message = "Project successfully archived, nested tasks resolved, and team records cleaned cleanly." });
+        }
+        catch (Exception)
+        {
+            // 3. Rollback safety net: If ANY step errors out, revert database state back to baseline entry parameters
+            await transaction.RollbackAsync();
+            return StatusCode(StatusCodes.Status500InternalServerError, "Transaction Failed: Critical operations errored. Rollback executed successfully.");
+        }
+    }
+
 }
