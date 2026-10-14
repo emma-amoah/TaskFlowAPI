@@ -162,9 +162,11 @@ using (var scope = app.Services.CreateScope())
     {
         var roleManager = services.GetRequiredService<RoleManager<IdentityRole>>();
         var userManager = services.GetRequiredService<UserManager<User>>();
+        var configuration = services.GetRequiredService<IConfiguration>();
+        var loggerFactory = services.GetRequiredService<ILoggerFactory>();
 
         // Execute the asynchronous seeder engine task synchronously on startup thread configurations
-        await DbInitializer.SeedRolesAndAdminAsync(roleManager, userManager);
+        await DbInitializer.SeedRolesAndAdminAsync(roleManager, userManager, configuration, loggerFactory);
     }
     catch (Exception ex)
     {

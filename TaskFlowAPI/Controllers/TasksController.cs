@@ -39,12 +39,45 @@ public class TasksController : ControllerBase
     {
         var query = _context.Tasks.AsNoTracking();
 
-        // keep the filtering logic intact, but remove the .Include() calls to avoid unnecessary joins
+        // Apply text searching across Title or Description if provided
+        if (!string.IsNullOrWhiteSpace(parameters.SearchTerm))
+        {
+            var search = parameters.SearchTerm.Trim().ToLower();
+            query = query.Where(t => t.Title.ToLower().Contains(search) ||
+                                     t.Description.ToLower().Contains(search));
+        }
 
+        // Apply TaskStatus Enum matching logic safely
+        if (!string.IsNullOrWhiteSpace(parameters.Status))
+        {
+            if (Enum.TryParse<TaskFlowAPI.Models.TaskStatus>(parameters.Status, true, out var statusEnum))
+            {
+                query = query.Where(t => t.Status == statusEnum);
+            }
+            else
+            {
+                return BadRequest($"Invalid status filter parameter. Supported values: {string.Join(", ", Enum.GetNames(typeof(TaskFlowAPI.Models.TaskStatus)))}");
+            }
+        }
+
+        // Apply TaskPriority Enum matching logic safely
+        if (!string.IsNullOrWhiteSpace(parameters.Priority))
+        {
+            if (Enum.TryParse<TaskPriority>(parameters.Priority, true, out var priorityEnum))
+            {
+                query = query.Where(t => t.Priority == priorityEnum);
+            }
+            else
+            {
+                return BadRequest($"Invalid priority filter parameter. Supported values: {string.Join(", ", Enum.GetNames(typeof(TaskPriority)))}");
+            }
+        }
+
+        // Pass dynamic parameters to the whitelisted expression sorting helper
         string sortColumn = string.IsNullOrWhiteSpace(parameters.SortBy) ? "Id" : parameters.SortBy;
         query = query.OrderByCustom(sortColumn, parameters.IsDescending);
 
-        // LINQ Projection avoids expensive .Include() overhead entirely
+        // LINQ Projection: Shape the precise database payload layout
         var projectedQuery = query.Select(t => new TaskDto
         {
             Id = t.Id,
@@ -61,9 +94,12 @@ public class TasksController : ControllerBase
             AssignedToName = t.AssignedTo != null ? t.AssignedTo.UserName : string.Empty
         });
 
-        var pagedResults = await PagedList<TaskDto>.CreateAsync(projectedQuery, parameters.PageNumber, parameters.PageSize);
-        return Ok(pagedResults);
+        // Execute pagination Skip or Take math natively on the database server
+        var response = await PagedList<TaskDto>.CreateAsync(projectedQuery, parameters.PageNumber, parameters.PageSize);
+
+        return Ok(response);
     }
+
 
 
 
@@ -150,27 +186,17 @@ public class TasksController : ControllerBase
         var task = await _context.Tasks.FindAsync(id);
         if (task == null) return NotFound($"Task with ID {id} was not found.");
 
-        // Relational boundary integrity verification checks
-        if (!await _context.Projects.AnyAsync(p => p.Id == dto.ProjectId))
+        // Task Update Ownership Lockout Check
+        var currentUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (!User.IsInRole(AppRoles.Admin) && !User.IsInRole(AppRoles.Manager) && task.CreatedBy != currentUserId)
         {
-            return BadRequest($"Parent Project with ID {dto.ProjectId} does not exist.");
+            return StatusCode(StatusCodes.Status403Forbidden, new { Message = "Access Denied: You do not have permission to update this task." });
         }
 
-        if (!await _context.Categories.AnyAsync(c => c.Id == dto.CategoryId))
-        {
-            return BadRequest($"Category with ID {dto.CategoryId} does not exist.");
-        }
+        // CRITICAL CONCURRENCY FIX: Tell EF Core's tracker to validate against the incoming Client Token
+        _context.Entry(task).Property(t => t.RowVersion).OriginalValue = dto.RowVersion;
 
-        if (!string.IsNullOrWhiteSpace(dto.AssignedToId))
-        {
-            var user = await _userManager.FindByIdAsync(dto.AssignedToId);
-            if (user == null || !user.IsActive)
-            {
-                return BadRequest("Cannot assign task to the specified user because the account is invalid or inactive.");
-            }
-        }
-
-        // Map updates cleanly onto the active database context tracking object
+        // Map your remaining scalar property fields from the inbound contract request payload
         _mapper.Map(dto, task);
 
         try
@@ -179,15 +205,13 @@ public class TasksController : ControllerBase
         }
         catch (DbUpdateConcurrencyException)
         {
-            if (!await _context.Tasks.AnyAsync(t => t.Id == id))
-            {
-                return NotFound("The task you are updating was deleted by another session.");
-            }
-            return Conflict("Concurrency Conflict: The task record was modified by another session. Please refresh and try again.");
+            if (!await _context.Tasks.AnyAsync(t => t.Id == id)) return NotFound("The task you are updating was deleted by another session.");
+            return Conflict("Concurrency Conflict: This record was modified by another user after you fetched it. Please refresh your sheet.");
         }
 
         return NoContent();
     }
+
 
 
     // DELETE: api/tasks/{id}
@@ -208,7 +232,7 @@ public class TasksController : ControllerBase
 
         if (!isAuthorized)
         {
-            return Forbid("Access Denied: You do not have permissions to delete this task. Only the creator, a Manager, or an Admin can delete this resource.");
+            return StatusCode(StatusCodes.Status403Forbidden, new { Message = "Access Denied: You do not have permissions to delete this task. Only the creator, a Manager, or an Admin can perform this action." });
         }
 
         _context.Tasks.Remove(task);

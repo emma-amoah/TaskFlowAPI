@@ -116,7 +116,11 @@ public class CommentsController : ControllerBase
         // Security Authorization Check: Only allow the comment author to delete their own post
         if (comment.AuthorId != userId)
         {
-            return Forbid("Access Denied: You cannot delete a comment posted by another user.");
+            // Enforce role bypass parameters if admins can drop comments
+            if (!User.IsInRole(AppRoles.Admin))
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { Message = "Access Denied: You cannot delete a comment posted by another team member." });
+            }
         }
 
         _context.Comments.Remove(comment);

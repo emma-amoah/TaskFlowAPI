@@ -1,4 +1,6 @@
 ﻿using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using System.Threading.Tasks;
 using TaskFlowAPI.Helpers;
 using TaskFlowAPI.Models;
@@ -7,11 +9,16 @@ namespace TaskFlowAPI.Services;
 
 public static class DbInitializer
 {
-    public static async Task SeedRolesAndAdminAsync(RoleManager<IdentityRole> roleManager, UserManager<User> userManager)
+    public static async Task SeedRolesAndAdminAsync(
+        RoleManager<IdentityRole> roleManager,
+        UserManager<User> userManager,
+        IConfiguration config,
+        ILoggerFactory loggerFactory)
     {
-        // Seed Roles arrays if they don't exist yet
-        string[] roleNames = { AppRoles.Admin, AppRoles.Manager, AppRoles.User };
+        var logger = loggerFactory.CreateLogger("DbInitializer");
 
+        // Seed System Roles
+        string[] roleNames = { AppRoles.Admin, AppRoles.Manager, AppRoles.User };
         foreach (var roleName in roleNames)
         {
             if (!await roleManager.RoleExistsAsync(roleName))
@@ -20,12 +27,21 @@ public static class DbInitializer
             }
         }
 
-        // Optional: Seed a default master Admin user for local testing environments
+        // Seed Admin User Safely
         var adminEmail = "admin@taskflow.com";
         var defaultAdmin = await userManager.FindByEmailAsync(adminEmail);
 
         if (defaultAdmin == null)
         {
+            // Extract password with NO plain-text string fallbacks
+            var adminPassword = config["SeedData:AdminPassword"];
+
+            if (string.IsNullOrWhiteSpace(adminPassword))
+            {
+                logger.LogCritical("CRITICAL CONFIGURATION ERROR: SeedData:AdminPassword is null or empty. Seed admin user creation skipped.");
+                return; // Halt execution safely without hardcoding the password
+            }
+
             var adminUser = new User
             {
                 UserName = "admin",
@@ -34,11 +50,15 @@ public static class DbInitializer
                 EmailConfirmed = true
             };
 
-            var createPowerUserResult = await userManager.CreateAsync(adminUser, "SecureAdminPassword123!");
-            if (createPowerUserResult.Succeeded)
+            var result = await userManager.CreateAsync(adminUser, adminPassword);
+            if (result.Succeeded)
             {
-                // Attach the Admin role designation to this seed entity
                 await userManager.AddToRoleAsync(adminUser, AppRoles.Admin);
+                logger.LogInformation("Master administrative seed user account generated successfully.");
+            }
+            else
+            {
+                logger.LogError("Failed to seed admin user. Errors: {Errors}", string.Join(", ", result.Errors));
             }
         }
     }

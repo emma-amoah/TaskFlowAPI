@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using TaskFlowAPI.Contexts;
 using TaskFlowAPI.DTOs;
 using TaskFlowAPI.Models;
+using TaskFlowAPI.Helpers;
 
 namespace TaskFlowAPI.Controllers;
 
@@ -100,46 +101,43 @@ public class AttachmentsController : ControllerBase
     [HttpGet("download/{id}")]
     public async Task<IActionResult> DownloadFile(int id)
     {
-        var attachment = await _context.Attachments.FindAsync(id);
-        if (attachment == null)
-        {
-            return NotFound($"Attachment with ID {id} was not found.");
-        }
+        var attachment = await _context.Attachments.Include(a => a.Task).FirstOrDefaultAsync(a => a.Id == id);
+        if (attachment == null || attachment.Task == null) return NotFound();
 
-        if (!System.IO.File.Exists(attachment.FilePath))
+        var currentUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+        // Verify user is linked to the parent task ecosystem before serving the file stream asset
+        if (!User.IsInRole(AppRoles.Admin) && !User.IsInRole(AppRoles.Manager) && attachment.CreatedBy != currentUserId && attachment.Task.AssignedToId != currentUserId)
         {
-            return NotFound("The physical file is missing from backend file infrastructure storage repositories.");
+            return StatusCode(StatusCodes.Status403Forbidden, new { Message = "Access Denied: You do not have permissions to download this file asset." });
         }
 
         var memoryStream = new MemoryStream();
-        using (var stream = new FileStream(attachment.FilePath, FileMode.Open))
+        await using (var stream = new FileStream(attachment.FilePath, FileMode.Open))
         {
             await stream.CopyToAsync(memoryStream);
         }
         memoryStream.Position = 0;
 
-        // Serves file back to browser seamlessly streaming its original user display name back into place
         return File(memoryStream, attachment.ContentType, attachment.OriginalFileName);
     }
-
-    // DELETE: api/attachments/{id}
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteAttachment(int id)
     {
         var attachment = await _context.Attachments.FindAsync(id);
-        if (attachment == null)
+        if (attachment == null) return NotFound();
+
+        var currentUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+        // Only allow the original file uploader, a Manager, or an Admin to wipe the physical asset
+        if (!User.IsInRole(AppRoles.Admin) && !User.IsInRole(AppRoles.Manager) && attachment.CreatedBy != currentUserId)
         {
-            return NotFound($"Attachment with ID {id} was not found.");
+            return StatusCode(StatusCodes.Status403Forbidden, new { Message = "Access Denied: You cannot delete an file attachment asset uploaded by another team member." });
         }
 
-        // 1. Remove Physical binary file off server disk memory assets first
-        if (System.IO.File.Exists(attachment.FilePath))
-        {
-            System.IO.File.Delete(attachment.FilePath);
-        }
+        if (System.IO.File.Exists(attachment.FilePath)) System.IO.File.Delete(attachment.FilePath);
 
-        // 2. Remove meta record context out of table map metrics
         _context.Attachments.Remove(attachment);
         await _context.SaveChangesAsync();
 

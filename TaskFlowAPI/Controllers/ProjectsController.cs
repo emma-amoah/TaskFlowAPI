@@ -121,28 +121,18 @@ public class ProjectsController : ControllerBase
     public async Task<IActionResult> UpdateProject(int id, [FromBody] SaveProjectDto dto)
     {
         var project = await _context.Projects.FindAsync(id);
-        if (project == null)
+        if (project == null) return NotFound();
+
+        var currentUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+        // Ensure only the creator or management tiers can edit structural project details
+        if (!User.IsInRole(AppRoles.Admin) && !User.IsInRole(AppRoles.Manager) && project.CreatedBy != currentUserId)
         {
-            return NotFound($"Project with ID {id} was not found.");
+            return StatusCode(StatusCodes.Status403Forbidden, new { Message = "Access Denied: You do not have permission to modify this project configuration." });
         }
 
-        // Map input updates onto the tracked database record instance
         _mapper.Map(dto, project);
-
-        try
-        {
-            await _context.SaveChangesAsync();
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            // Protection against simultaneous modifications via our BaseEntity.RowVersion token
-            if (!await _context.Projects.AnyAsync(p => p.Id == id))
-            {
-                return NotFound("The project you are updating was deleted by another user.");
-            }
-            return Conflict("Concurrency Conflict: The project record was modified by another session. Please reload and try again.");
-        }
-
+        await _context.SaveChangesAsync();
         return NoContent();
     }
 
@@ -166,45 +156,49 @@ public class ProjectsController : ControllerBase
 
     // POST: api/projects/{id}/archive-and-cleanup
     [HttpPost("{id}/archive-and-cleanup")]
+    [Authorize(Roles = $"{AppRoles.Admin},{AppRoles.Manager}")] // FIXED: Restrict access by role parameters explicitly
     public async Task<IActionResult> ArchiveProjectAndCleanupTasks(int id)
     {
         var project = await _context.Projects.FindAsync(id);
         if (project == null) return NotFound($"Project with ID {id} was not found.");
 
-        // 1. Initiate an explicit multi-step ACID transaction boundary
+        // Prevent double-archiving stacking states cleanly
+        if (project.IsArchived)
+        {
+            return BadRequest("This project asset has already been archived.");
+        }
+
         using var transaction = await _context.Database.BeginTransactionAsync();
 
         try
         {
-            // Step A: Update parent Project state metrics
-            project.Description = $"[ARCHIVED ON {DateTime.UtcNow:yyyy-MM-dd}] - " + project.Description;
+            // Toggle the structural flag clean state parameter
+            project.IsArchived = true;
             _context.Projects.Update(project);
             await _context.SaveChangesAsync();
 
-            // Step B: Bulk execute state modification updates across children via the same context frame
+            // Automatically sweep up and complete all child task elements inline atomic structures
             var activeTasks = await _context.Tasks.Where(t => t.ProjectId == id && !t.IsDeleted).ToListAsync();
             foreach (var task in activeTasks)
             {
-                task.Status = TaskFlowAPI.Models.TaskStatus.Completed; // Mark remaining backlog done during archiving
+                task.Status = TaskFlowAPI.Models.TaskStatus.Completed;
                 _context.Tasks.Update(task);
             }
             await _context.SaveChangesAsync();
 
-            // Step C: Flush obsolete structural metadata rows entirely (e.g. clean stale project member records)
+            // Release and flush associated project membership data links safely
             var projectMembers = await _context.ProjectMembers.Where(pm => pm.ProjectId == id).ToListAsync();
             _context.ProjectMembers.RemoveRange(projectMembers);
             await _context.SaveChangesAsync();
 
-            // 2. Commit all 3 discrete execution steps as a single immutable database block unit
             await transaction.CommitAsync();
 
-            return Ok(new { Message = "Project successfully archived, nested tasks resolved, and team records cleaned cleanly." });
+            return Ok(new { Message = "Project flag switched to Archived and nested tasks compiled successfully." });
         }
         catch (Exception)
         {
-            // 3. Rollback safety net: If ANY step errors out, revert database state back to baseline entry parameters
             await transaction.RollbackAsync();
-            return StatusCode(StatusCodes.Status500InternalServerError, "Transaction Failed: Critical operations errored. Rollback executed successfully.");
+            return StatusCode(StatusCodes.Status500InternalServerError, "Transaction Failed: Atomic multi-step operations aborted. Reversion executed.");
         }
     }
 

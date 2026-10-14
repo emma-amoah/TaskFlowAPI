@@ -177,7 +177,7 @@ public class AuthController : ControllerBase
                 }
 
                 await _context.SaveChangesAsync();
-                return StatusCode(StatusCodes.Status403Forbidden, "Security Breach Alert: Token reuse detected. All active security contexts dropped.");
+                return StatusCode(StatusCodes.Status403Forbidden, new { Message = "Security Breach Alert: Token reuse detected. All active device sessions have been forcefully dropped." });
             }
 
             return Unauthorized("Refresh token has been revoked or expired.");
