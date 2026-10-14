@@ -58,7 +58,8 @@ public static class DbInitializer
             }
             else
             {
-                logger.LogError("Failed to seed admin user. Errors: {Errors}", string.Join(", ", result.Errors));
+                var errorDescriptions = string.Join(", ", result.Errors.Select(e => e.Description));
+                logger.LogError("Failed to seed admin user. Reasons: {Errors}", errorDescriptions);
             }
         }
     }

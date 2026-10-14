@@ -10,7 +10,7 @@ using TaskFlowAPI.Contexts;
 namespace TaskFlowAPI.Controllers;
 
 [ApiController]
-[Route("api/v{version:apiVersion}/[controller]")]
+[Route("api/[controller]")]
 [Authorize(Roles = AppRoles.Admin)] // Secure administrative reporting engine boundary lock
 public class ReportsController : ControllerBase
 {
@@ -36,6 +36,7 @@ public class ReportsController : ControllerBase
 
 
     [HttpGet("user-productivity/{userId}")]
+    [Authorize(Roles = $"{AppRoles.Admin},{AppRoles.Manager}")]
     public async Task<IActionResult> GetUserProductivityReport(string userId)
     {
         var param = new SqlParameter("@UserId", userId);
@@ -51,6 +52,7 @@ public class ReportsController : ControllerBase
     }
 
     [HttpGet("project-burndown/{projectId}")]
+    [Authorize(Roles = $"{AppRoles.Admin},{AppRoles.Manager}")]
     public async Task<IActionResult> GetProjectBurndownStatus(int projectId)
     {
         var param = new SqlParameter("@ProjectId", projectId);
@@ -65,6 +67,7 @@ public class ReportsController : ControllerBase
 
 
     [HttpPost("purge-tokens")]
+    [Authorize(Roles = AppRoles.Admin)]
     public async Task<IActionResult> PurgeExpiredRefreshTokens()
     {
         // Execute stored procedure 3 using ExecuteSqlRawAsync since it modifies rows instead of selecting data

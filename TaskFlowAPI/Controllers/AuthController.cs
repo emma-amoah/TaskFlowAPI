@@ -177,7 +177,12 @@ public class AuthController : ControllerBase
                 }
 
                 await _context.SaveChangesAsync();
-                return StatusCode(StatusCodes.Status403Forbidden, new { Message = "Security Breach Alert: Token reuse detected. All active device sessions have been forcefully dropped." });
+
+                // FIXED (Line 242): Clean 403 Forbidden structured response instead of broken native Forbid() helper
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    Message = "Security Breach Alert: Token reuse detected. All active device security contexts have been forcefully dropped for user safety."
+                });
             }
 
             return Unauthorized("Refresh token has been revoked or expired.");
