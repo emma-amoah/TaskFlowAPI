@@ -41,11 +41,12 @@ public class ReportsController : ControllerBase
     {
         var param = new SqlParameter("@UserId", userId);
 
-        // Execute stored procedure 1 using FromSqlRaw
-        var reportData = await _context.Database
+        // Stored procedures can't be composed with TOP(1), so load the rows first
+        var rows = await _context.Database
             .SqlQueryRaw<ProductivityReportResult>("EXEC sp_GetUserProductivityReport @UserId", param)
-            .FirstOrDefaultAsync();
+            .ToListAsync();
 
+        var reportData = rows.FirstOrDefault();
         if (reportData == null) return NotFound("Unable to extract productivity statistics metrics.");
 
         return Ok(reportData);
