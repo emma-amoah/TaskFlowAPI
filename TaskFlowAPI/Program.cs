@@ -142,7 +142,12 @@ builder.Services.AddAuthorization(options =>
 
 builder.Services.AddTransient<IEmailSender, MockEmailSender>();
 
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(o => o.JsonSerializerOptions.NumberHandling =
+        System.Text.Json.Serialization.JsonNumberHandling.Strict);
+
+builder.Services.ConfigureHttpJsonOptions(o =>
+    o.SerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.Strict);
 
 var app = builder.Build();
 
