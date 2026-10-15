@@ -26,6 +26,8 @@ public class TaskDto
     public string? AssignedToId { get; set; }
     public string? AssignedToName { get; set; }
 
+    public byte[] RowVersion { get; set; } = Array.Empty<byte>();
+
     public List<CommentDto> Comments { get; set; } = new();
     public List<AttachmentFileDto> Attachments { get; set; } = new();
 }

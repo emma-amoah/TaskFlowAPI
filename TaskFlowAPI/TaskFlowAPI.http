@@ -4,3 +4,11 @@ GET {{TaskFlowAPI_HostAddress}}/weatherforecast/
 Accept: application/json
 
 ###
+POST {{TaskFlowAPI_HostAddress}}/api/projects/
+Accept: application/json
+[
+  {
+  "name": "API Presentation",
+  "description": "Intro and demonstration of TaskFlowAPI"
+  }
+]

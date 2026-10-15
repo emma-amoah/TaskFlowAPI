@@ -244,7 +244,7 @@ public class AuthController : ControllerBase
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (storedToken.UserId != userId)
         {
-            return Forbid("Access Denied: You cannot revoke another user's session tokens.");
+            return StatusCode(StatusCodes.Status403Forbidden, new { Message = "Access Denied: You cannot revoke another user's session tokens." });
         }
 
         // 3. Explicitly revoke the token state

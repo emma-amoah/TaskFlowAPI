@@ -47,11 +47,12 @@ public class TokenService
             authClaims.Add(new Claim(ClaimTypes.Role, role));
         }
 
-        var expiryMinutes = double.Parse(jwtSettings["ExpiryInMinutes"] ?? "60");
+        var expiryMinutes = double.Parse(jwtSettings["ExpiryInMinutes"] ?? "240");
 
         var token = new JwtSecurityToken(
             issuer: jwtSettings["Issuer"],
             audience: jwtSettings["Audience"],
+            notBefore: DateTime.UtcNow,
             expires: DateTime.UtcNow.AddMinutes(expiryMinutes),
             claims: authClaims,
             signingCredentials: creds
