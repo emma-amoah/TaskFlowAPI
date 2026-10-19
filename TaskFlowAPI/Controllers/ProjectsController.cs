@@ -54,24 +54,20 @@ public class ProjectsController : ControllerBase
             Name = p.Name,
             Description = p.Description,
             CreatedAt = p.CreatedAt,
-            // Inline aggregate calculation translated directly into a SQL COUNT() statement
-            TotalTasksCount = p.Tasks.Count(t => !t.IsDeleted),
 
-            // Project nested collections cleanly without loading entire IdentityUser entities
+            // Project creation audit tracking data properties
+            CreatedById = p.CreatedBy ?? string.Empty,
+            CreatedByName = _context.Users.Where(u => u.Id == p.CreatedBy).Select(u => u.UserName).FirstOrDefault() ?? "System",
+
+            TotalTasksCount = p.Tasks.Count(t => !t.IsDeleted),
             Members = p.ProjectMembers.Select(pm => new ProjectMemberDto
             {
                 UserId = pm.UserId,
-
-                // 1. FIXED: Handle both cases where the User object OR the underlying UserName string is null
-                UserName = (pm.User != null && pm.User.UserName != null)
-                ? pm.User.UserName
-                : string.Empty,
-
-                // 2. FIXED: Fallback to a default string if the database column contains a null value
+                UserName = (pm.User != null && pm.User.UserName != null) ? pm.User.UserName : string.Empty,
                 Role = pm.Role ?? "Member"
             }).ToList()
-
         });
+
 
         // PagedList script now handles the Skip/Take logic entirely on the projected DTO query
         var response = await PagedList<ProjectDto>.CreateAsync(projectedQuery, parameters.PageNumber, parameters.PageSize);

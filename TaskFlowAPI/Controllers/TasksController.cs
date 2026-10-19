@@ -86,6 +86,10 @@ public class TasksController : ControllerBase
             Status = t.Status.ToString(),
             Priority = t.Priority.ToString(),
             DueDate = t.DueDate,
+
+            CreatedById = t.CreatedBy ?? string.Empty,
+            CreatedByName = _context.Users.Where(u => u.Id == t.CreatedBy).Select(u => u.UserName).FirstOrDefault() ?? "System",
+
             ProjectId = t.ProjectId,
             ProjectName = t.Project != null ? t.Project.Name : string.Empty,
             CategoryId = t.CategoryId,
@@ -112,18 +116,34 @@ public class TasksController : ControllerBase
             .Include(t => t.Project)
             .Include(t => t.Category)
             .Include(t => t.AssignedTo)
-            .Include(t => t.Comments)
-                .ThenInclude(c => c.Author)
+            .Include(t => t.Comments).ThenInclude(c => c.Author)
             .Include(t => t.Attachments)
             .FirstOrDefaultAsync(t => t.Id == id);
 
-        if (task == null)
-        {
-            return NotFound($"Task with ID {id} was not found.");
-        }
+        if (task == null) return NotFound($"Task with ID {id} was not found.");
 
-        return Ok(_mapper.Map<TaskDto>(task));
+        // Fetch the creator's username to pass into the mapping tracking array
+        var creatorName = await _context.Users
+        .Where(u => u.Id == task.CreatedBy)
+        .Select(u => u.UserName)
+        .FirstOrDefaultAsync();
+
+        var creatorsMap = new Dictionary<string, string>();
+        if (task.CreatedBy != null && creatorName != null)
+        {
+            creatorsMap[task.CreatedBy] = creatorName;
+        }
+        var baseUrl = $"{Request.Scheme}://{Request.Host}";
+
+        var taskDto = _mapper.Map<TaskDto>(task, opts =>
+        {
+            opts.Items["BaseUrl"] = baseUrl;
+            opts.Items["CreatorsMap"] = creatorsMap; // Delivers data cleanly down to mapping profile
+        });
+
+        return Ok(taskDto);
     }
+
 
 
     // POST: api/tasks

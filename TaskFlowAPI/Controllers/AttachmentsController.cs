@@ -112,14 +112,16 @@ public class AttachmentsController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, new { Message = "Access Denied: You do not have permissions to download this file asset." });
         }
 
-        var memoryStream = new MemoryStream();
-        await using (var stream = new FileStream(attachment.FilePath, FileMode.Open))
+        if (!System.IO.File.Exists(attachment.FilePath))
         {
-            await stream.CopyToAsync(memoryStream);
+            return NotFound("The physical file is missing from backend file infrastructure storage repositories.");
         }
-        memoryStream.Position = 0;
 
-        return File(memoryStream, attachment.ContentType, attachment.OriginalFileName);
+        // Standard async streaming to prevent file locks or thread blockages on heavy assets
+        var fileBytes = await System.IO.File.ReadAllBytesAsync(attachment.FilePath);
+
+        // Delivers the download cleanly, prompting the user's browser with the original filename string
+        return File(fileBytes, attachment.ContentType, attachment.OriginalFileName);
     }
 
     [HttpDelete("{id}")]

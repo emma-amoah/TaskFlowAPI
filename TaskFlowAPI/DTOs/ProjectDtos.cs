@@ -9,6 +9,8 @@ public class ProjectDto
     public string Name { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
+    public string CreatedById { get; set; } = string.Empty;
+    public string CreatedByName { get; set; } = string.Empty;
 
     // Flat metadata counts or basic lists to avoid massive JSON nesting depth
     public int TotalTasksCount { get; set; }

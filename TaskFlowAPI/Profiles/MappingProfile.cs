@@ -36,7 +36,21 @@ public class MappingProfile : Profile
             .ForMember(dest => dest.CategoryName, opt => opt.MapFrom(src => src.Category != null ? src.Category.Name : string.Empty))
             .ForMember(dest => dest.AssignedToName, opt => opt.MapFrom(src => src.AssignedTo != null ? src.AssignedTo.UserName : string.Empty))
             .ForMember(dest => dest.Comments, opt => opt.MapFrom(src => src.Comments))
-            .ForMember(dest => dest.Attachments, opt => opt.MapFrom(src => src.Attachments));
+            .ForMember(dest => dest.Attachments, opt => opt.MapFrom(src => src.Attachments))
+            .ForMember(dest => dest.CreatedById, opt => opt.MapFrom(src => src.CreatedBy))
+            // Looks up creator context strings cleanly or falls back safely
+            .ForMember(dest => dest.CreatedByName, opt => opt.MapFrom((src, dest, destMember, context) =>
+            {
+                if (src.CreatedBy != null
+                    && context.Items.TryGetValue("CreatorsMap", out var mapObj)
+                    && mapObj is Dictionary<string, string> map
+                    && map.TryGetValue(src.CreatedBy, out var name))
+                {
+                    return name;
+                }
+                return "System";
+            }));
+
 
         // 4. COMMENT MAPPINGS
         CreateMap<CreateCommentDto, Comment>();
@@ -44,7 +58,19 @@ public class MappingProfile : Profile
             .ForMember(dest => dest.AuthorName, opt => opt.MapFrom(src => src.Author != null ? src.Author.UserName : string.Empty));
 
         // 5. ATTACHMENT MAPPINGS
-        CreateMap<AttachmentFile, AttachmentFileDto>();
+        CreateMap<AttachmentFile, AttachmentFileDto>()
+            .ForMember(dest => dest.DownloadUrl, opt => opt.MapFrom((src, dest, destMember, context) =>
+            {
+                // Safely extract the active base URL domain context passed from the controller runtime
+                if (context.Items.TryGetValue("BaseUrl", out var baseUrl))
+                {
+                    return $"{baseUrl}/api/Attachments/download/{src.Id}";
+                }
+
+                // Fallback relative path pattern if no context string was supplied
+                return $"/api/Attachments/download/{src.Id}";
+            }));
+
 
         // 6. MEMBER MAPPINGS
         CreateMap<ProjectMember, ProjectMemberDto>()

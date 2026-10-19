@@ -4,7 +4,9 @@ using Microsoft.AspNetCore.OpenApi;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
+using Microsoft.Win32;
 using System.Security;
+using System.Security.Cryptography.Xml;
 using System.Text;
 using TaskFlowAPI.Contexts;
 using TaskFlowAPI.Helpers;
@@ -52,16 +54,11 @@ builder.Services.AddOpenApi(options =>
         document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
         document.Components.SecuritySchemes[JwtBearerDefaults.AuthenticationScheme] = securityScheme;
 
-        var requirement = new OpenApiSecurityRequirement
-        {
-            [new OpenApiSecuritySchemeReference(JwtBearerDefaults.AuthenticationScheme, document)] = new List<string>()
-        };
-
-        document.Security ??= new List<OpenApiSecurityRequirement>();
-        document.Security.Add(requirement);
-
         return Task.CompletedTask;
     });
+
+    // Register the targeted operation transformer we will build in Step 2
+    options.AddOperationTransformer<SecurityRequirementsOperationTransformer>();
 });
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");

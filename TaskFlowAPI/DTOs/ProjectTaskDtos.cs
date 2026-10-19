@@ -16,6 +16,9 @@ public class TaskDto
     public string Priority { get; set; } = string.Empty;
     public DateTime? DueDate { get; set; }
 
+    public string CreatedById { get; set; } = string.Empty;
+    public string CreatedByName { get; set; } = string.Empty;
+
     // Flattened relation parameters
     public int ProjectId { get; set; }
     public string ProjectName { get; set; } = string.Empty;
